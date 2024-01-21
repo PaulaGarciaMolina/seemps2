@@ -150,16 +150,6 @@ def arnoldi_eigh(
             )
         v = operator @ v  # type: ignore
         energy = arnoldi.H[0, 0].real
-        if len(arnoldi.V) == 1:
-            eigenvalue_change = energy - energies[-1]
-            if (
-                (eigenvalue_change > 0 and eigenvalue_change >= abs(tol_up))
-                or (eigenvalue_change < 0 and eigenvalue_change >= -abs(tol))
-                and i > miniter
-            ):
-                message = f"Eigenvalue converged within tolerance {tol}"
-                converged = True
-                break
         energies.append(energy)
         if energy < best_energy:
             best_energy, best_vector = energy, arnoldi.V[0]
@@ -175,6 +165,16 @@ def arnoldi_eigh(
                     variances=variances,
                 ),
             )
+        if len(arnoldi.V) == 1:
+            eigenvalue_change = energies[-1] - energies[-2]
+            if (
+                (eigenvalue_change > 0 and eigenvalue_change >= abs(tol_up))
+                or (eigenvalue_change < 0 and eigenvalue_change >= -abs(tol))
+                and i > miniter
+            ):
+                message = f"Eigenvalue converged within tolerance {tol}"
+                converged = True
+                break
     return OptimizeResults(
         state=best_vector,
         energy=best_energy,
