@@ -23,13 +23,16 @@ class MPSArnoldiRepresentation:
     N: NDArray
     V: list[MPS]
     strategy: Strategy
+    tol_ill : float
 
-    def __init__(self, operator: MPO, strategy: Strategy = DESCENT_STRATEGY):
+    def __init__(self, operator: MPO, strategy: Strategy = DESCENT_STRATEGY, 
+                 tol_ill : float = np.finfo(float).eps * 10):
         self.operator = operator
         self.H = self.empty
         self.N = self.empty
         self.V = []
         self.strategy = strategy.replace(normalize=True)
+        self.tol_ill = tol_ill
         pass
 
     def add_vector(self, v: MPS) -> tuple[MPS, bool]:
@@ -42,7 +45,7 @@ class MPSArnoldiRepresentation:
             v = simplify(v, strategy=self.strategy)
         n = np.asarray([scprod(vi, v) for vi in self.V]).reshape(-1, 1)
         new_N = np.block([[self.N, n], [n.T.conj(), 1.0]])
-        if len(new_N) > 1 and _ill_conditioned_norm_matrix(new_N):
+        if len(new_N) > 1 and _ill_conditioned_norm_matrix(new_N, self.tol_ill):
             return v, False
         self.N = new_N
         Op = self.operator
@@ -100,13 +103,14 @@ def arnoldi_eigh(
     nvectors: int = 10,
     tol: float = 1e-13,
     tol_up: float = 1e-13,
+    tol_ill: float = np.finfo(float).eps * 10,
     strategy: Strategy = DESCENT_STRATEGY,
     miniter: int = 1,
     callback: Optional[Callable] = None,
 ) -> OptimizeResults:
     if v0 is None:
         v0 = random_mps(operator.dimensions(), D=2)
-    arnoldi = MPSArnoldiRepresentation(operator, strategy)
+    arnoldi = MPSArnoldiRepresentation(operator, strategy, tol_ill)
     arnoldi.add_vector(v0)
     v: MPS = operator @ v0  # type: ignore
     best_energy = arnoldi.H[0, 0].real
