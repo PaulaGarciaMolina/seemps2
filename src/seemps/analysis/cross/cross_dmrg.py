@@ -127,6 +127,7 @@ def cross_dmrg(
 class CrossInterpolationDMRG(CrossInterpolation):
     def __init__(self, black_box: BlackBox, initial_point: np.ndarray, with_cache: bool=False):
         super().__init__(black_box, initial_point)
+        self.with_cache = with_cache
         self.cache = {}
 
     def sample_superblock(self, k: int) -> np.ndarray:
