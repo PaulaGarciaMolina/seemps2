@@ -10,6 +10,7 @@ from .cross import (
     CrossStrategy,
     maxvol_square,
     _check_convergence,
+    i2s
 )
 from ..sampling import random_mps_indices
 from ...state import Strategy, DEFAULT_TOLERANCE
@@ -53,6 +54,7 @@ def cross_dmrg(
     cross_strategy: CrossStrategyDMRG = CrossStrategyDMRG(),
     initial_points: np.ndarray | None = None,
     callback: Callable | None = None,
+    with_cache: bool = False
 ) -> CrossResults:
     """
     Computes the MPS representation of a black-box function using the tensor cross-approximation (TCI)
@@ -71,7 +73,9 @@ def cross_dmrg(
     callback : Callable, optional
         A callable called on the MPS after each iteration.
         The output of the callback is included in a list 'callback_output' in CrossResults.
-
+    with_cache : bool, optional
+        If flag is True, then all requested values are stored and retrieved from the storage 
+        upon repeated requests. It is False by default.
     Returns
     -------
     CrossResults
@@ -86,7 +90,7 @@ def cross_dmrg(
             rng=cross_strategy.rng,
         )
 
-    cross = CrossInterpolationDMRG(black_box, initial_points)
+    cross = CrossInterpolationDMRG(black_box, initial_points, with_cache=with_cache)
     converged = False
     callback_output = []
     forward = True
@@ -116,20 +120,46 @@ def cross_dmrg(
         points=points,
         evals=black_box.evals,
         callback_output=callback_output,
+        cache=cross.cache
     )
 
 
 class CrossInterpolationDMRG(CrossInterpolation):
-    def __init__(self, black_box: BlackBox, initial_point: np.ndarray):
+    def __init__(self, black_box: BlackBox, initial_point: np.ndarray, with_cache: bool=False):
         super().__init__(black_box, initial_point)
+        self.cache = {}
 
     def sample_superblock(self, k: int) -> np.ndarray:
         i_l, i_g = self.I_l[k], self.I_g[k + 1]
         i_s1, i_s2 = self.I_s[k], self.I_s[k + 1]
         mps_indices = self.combine_indices(i_l, i_s1, i_s2, i_g)
-        return self.black_box[mps_indices].reshape(
+        results = []
+        new_rows = []
+        new_rows_strs = []
+        new_rows_pos = []
+
+        for pos, idx in enumerate(mps_indices):
+            idx_str = i2s(idx)
+            if self.with_cache and idx_str in self.cache:
+                results.append(self.cache[idx_str])
+            else:
+                results.append(None)
+                new_rows.append(idx)
+                new_rows_strs.append(idx_str)
+                new_rows_pos.append(pos)
+
+        if new_rows:
+            new_rows = np.array(new_rows)
+            new_vals = self.black_box[new_rows]  # <--- Vectorized batch call!
+
+            for idx_str, val, pos in zip(new_rows_strs, new_vals, new_rows_pos):
+                self.cache[idx_str] = val
+                results[pos] = val
+
+        evals = np.array(results).reshape(
             (len(i_l), len(i_s1), len(i_s2), len(i_g))
         )
+        return evals
 
 
 def _update_dmrg(
