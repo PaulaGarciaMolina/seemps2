@@ -301,3 +301,7 @@ def _check_convergence(
         logger(f"Maxbond reached above the threshold {cross_strategy.maxbond}")
         return True
     return False
+
+def i2s(i):
+        """Transform array of int like [1, 2, 3] into string like '1-2-3'."""
+        return '-'.join([str(v) for v in i])
