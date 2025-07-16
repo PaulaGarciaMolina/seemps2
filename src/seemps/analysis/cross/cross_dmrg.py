@@ -1,3 +1,4 @@
+from operator import is_
 import numpy as np
 import scipy.linalg  # type: ignore
 from dataclasses import dataclass
@@ -71,7 +72,9 @@ class CrossInterpolationDMRG(CrossInterpolation):
         super().__init__(black_box, initial_point)
         self.with_cache = with_cache
         self.cache = {}
-
+        self.i_opt = None
+        self.y_opt = None
+        self.opt_trajectory = {}
     def sample_superblock(self, k: int) -> np.ndarray:
         i_l, i_g = self.I_l[k], self.I_g[k + 1]
         i_s1, i_s2 = self.I_s[k], self.I_s[k + 1]
@@ -98,19 +101,92 @@ class CrossInterpolationDMRG(CrossInterpolation):
             for idx_str, val, pos in zip(new_rows_strs, new_vals, new_rows_pos):
                 self.cache[idx_str] = val
                 results[pos] = val
-
         evals = np.array(results).reshape(
             (len(i_l), len(i_s1), len(i_s2), len(i_g))
         )
-        return evals
+        return evals, mps_indices
+    
+    def smooth_func(self, y, y0=0., opt=1.):
+        """Smooth function that transforms max to min."""
+        return np.pi/2 - np.arctan(y - y0)
+    
+    def find_opt(self, I, y, i_opt, y_opt, is_min=True):
+        """Find the minimum or maximum value on a set of sampled points."""
+        y = y.flatten()
+        if is_min:
+            ind = np.argmin(y)
+        else:
+            ind = np.argmax(y)
+        y_opt_curr = y[ind]
+        self.opt_trajectory[i2s(I[ind, :])] = y_opt_curr
+        if is_min and y_opt is not None and y_opt_curr >= y_opt:
+            return i_opt, y_opt
+
+        if not is_min and y_opt is not None and y_opt_curr >= y_opt:
+            return i_opt, y_opt
+
+        return I[ind, :], y_opt_curr
 
     def _update_dmrg(
         self,
         k: int,
         forward: bool,
     ) -> None:
-        superblock = self.sample_superblock(k)
+        superblock, _ = self.sample_superblock(k)
         r_l, s1, s2, r_g = superblock.shape
+        A = superblock.reshape(r_l * s1, s2 * r_g)
+        ## Non-destructive SVD
+        U, S, V = svd(A, check_finite=False)
+        destructively_truncate_vector(S, self.cross_strategy.strategy)
+        r = S.size
+        U, S, V = U[:, :r], np.diag(S), V[:r, :]
+        ##
+        if forward:
+            if k < self.sites - 2:
+                C = U.reshape(r_l * s1, r)
+                Q, _ = scipy.linalg.qr(
+                    C, mode="economic", overwrite_a=True, check_finite=False
+                )  # type: ignore
+                I, G = maxvol_square(
+                    Q,
+                    self.cross_strategy.maxiter_maxvol_square,
+                    self.cross_strategy.tol_maxvol_square,  # type: ignore
+                )
+                self.I_l[k + 1] = self.combine_indices(self.I_l[k], self.I_s[k])[I]
+                self.mps[k] = G.reshape(r_l, s1, r)
+            else:
+                self.mps[k] = U.reshape(r_l, s1, r)
+                self.mps[k + 1] = (S @ V).reshape(r, s2, r_g)
+        else:
+            if k > 0:
+                R = V.reshape(r, s2 * r_g)
+                Q, _ = scipy.linalg.qr(  # type: ignore
+                    R.T, mode="economic", overwrite_a=True, check_finite=False
+                )
+                I, G = maxvol_square(
+                    Q,
+                    self.cross_strategy.maxiter_maxvol_square,
+                    self.cross_strategy.tol_maxvol_square,  # type: ignore
+                )
+                self.I_g[k] = self.combine_indices(self.I_s[k + 1], self.I_g[k + 1])[I]
+                self.mps[k + 1] = (G.T).reshape(r, s2, r_g)
+            else:
+                self.mps[k] = (U @ S).reshape(r_l, s1, r)
+                self.mps[k + 1] = V.reshape(r, s2, r_g)
+
+    def _update_dmrg_opt(
+        self,
+        k: int,
+        forward: bool,
+        is_min: bool=True
+    ) -> None:
+        superblock, mps_indices = self.sample_superblock(k)
+        if self.y_opt is None:
+            self.y_opt = np.inf if is_min else -np.inf
+        self.i_opt, self.y_opt = self.find_opt(mps_indices, superblock, self.i_opt, self.y_opt, is_min)
+        r_l, s1, s2, r_g = superblock.shape
+        if is_min:
+            superblock = self.smooth_func(superblock, self.y_opt)
         A = superblock.reshape(r_l * s1, s2 * r_g)
         ## Non-destructive SVD
         U, S, V = svd(A, check_finite=False)
@@ -183,12 +259,63 @@ class CrossInterpolationDMRG(CrossInterpolation):
                     self._update_dmrg(k, forward)
                 if callback:
                     callback_output.append(callback(self.mps, logger=logger))
+                # Backward sweep
+                forward = False
+                for k in reversed(range(self.sites - 1)):
+                    self._update_dmrg(k, forward)
+                if callback:
+                    callback_output.append(callback(self.mps, logger=logger))
+            if not converged:
+                logger("Maximum number of TT-Cross iterations reached")
+        points = self.indices_to_points(forward)
+        return CrossResults(
+            mps=self.mps,
+            points=points,
+            evals=self.black_box.evals,
+            callback_output=callback_output,
+            cache=self.cache,
+        )
+
+    def optimize(self, is_min : bool =True,
+        callback: Callable | None = None,
+    ) -> CrossResults:
+        """
+        Computes the MPS representation of a black-box function using the tensor cross-approximation (TCI)
+        algorithm based on two-site optimizations in a DMRG-like manner.
+        The black-box function can represent several different structures. See `black_box` for usage examples.
+
+        Parameters
+        ----------
+        is min : bool, optional
+            If True the minimum is returned.
+        callback : Callable, optional
+            A callable called on the MPS after each iteration.
+            The output of the callback is included in a list 'callback_output' in CrossResults.
+        Returns
+        -------
+        CrossResults
+            A dataclass containing the MPS representation of the black-box function,
+            among other useful information.
+        """
+        
+
+        converged = False
+        callback_output = []
+        forward = True
+        with make_logger(2) as logger:
+            for i in range(self.cross_strategy.maxiter):
+                # Forward sweep
+                forward = True
+                for k in range(self.sites - 1):
+                    self._update_dmrg_opt(k, forward, is_min)
+                if callback:
+                    callback_output.append(callback(self.mps, logger=logger))
                 if converged := _check_convergence(self, i, self.cross_strategy, logger):
                     break
                 # Backward sweep
                 forward = False
                 for k in reversed(range(self.sites - 1)):
-                    self._update_dmrg(k, forward)
+                    self._update_dmrg_opt(k, forward, is_min)
                 if callback:
                     callback_output.append(callback(self.mps, logger=logger))
                 if converged := _check_convergence(self, i, self.cross_strategy, logger):
@@ -201,5 +328,8 @@ class CrossInterpolationDMRG(CrossInterpolation):
             points=points,
             evals=self.black_box.evals,
             callback_output=callback_output,
-            cache=self.cache
+            cache=self.cache,
+            opt_trajectory=self.opt_trajectory,
+            i_opt=self.i_opt,
+            y_opt=self.y_opt
         )
