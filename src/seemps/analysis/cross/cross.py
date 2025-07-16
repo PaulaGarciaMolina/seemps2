@@ -2,6 +2,7 @@ import numpy as np
 import scipy.linalg  # type: ignore
 import dataclasses
 import functools
+from typing import Dict
 from copy import deepcopy
 from typing import TypeAlias
 from .black_box import BlackBox
@@ -72,6 +73,8 @@ class CrossResults:
         An array collecting the results of the callback function, called at each iteration.
     trajectories : VectorLike, optional
         A collection of arrays containing information of the interpolation for each iteration.
+    cache : Dict, optional
+        A collection of evaluations for each index
     """
 
     mps: MPS
@@ -79,6 +82,7 @@ class CrossResults:
     points: np.ndarray
     callback_output: VectorLike | None = None
     trajectories: VectorLike | None = None
+    cache: Dict | None = None
 
 
 class CrossInterpolation:
