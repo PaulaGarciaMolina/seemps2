@@ -28,13 +28,15 @@ DEFAULT_CROSS_STRATEGY = SIMPLIFICATION_STRATEGY.replace(
 
 # TODO: Implement local error evaluation
 
+def get_max_D(mps):
+    return max([max(t.shape) for t in mps])
+
 
 @dataclass
 class CrossStrategyDMRG(CrossStrategy):
     strategy: Strategy = DEFAULT_CROSS_STRATEGY
     tol_maxvol_square: float = 1.05
     maxiter_maxvol_square: int = 10
-    max_func_evals: int = 10000
     """
     Dataclass containing the parameters for the DMRG-based TCI.
     The common parameters are documented in the base `CrossStrategy` class.
@@ -48,13 +50,7 @@ class CrossStrategyDMRG(CrossStrategy):
         Sensibility for the square maxvol decomposition.
     maxiter_maxvol_square : int, default=10
         Maximum number of iterations for the square maxvol decomposition.
-    max_func_evals : int, default=10000
-        Maximum number of function evaluations.
     """
-
-
-
-
 
 class CrossInterpolationDMRG(CrossInterpolation):
     def __init__(
@@ -77,7 +73,13 @@ class CrossInterpolationDMRG(CrossInterpolation):
         self.cache = {}
         self.i_opt = None
         self.y_opt = None
-        self.opt_trajectory = {}
+        self.opt_trajectory = []
+    def refresh(self):
+        self.cache = {}
+        self.i_opt = None
+        self.y_opt = None
+        self.opt_trajectory = []
+        self.black_box.evals = 0
     def sample_superblock(self, k: int) -> np.ndarray:
         i_l, i_g = self.I_l[k], self.I_g[k + 1]
         i_s1, i_s2 = self.I_s[k], self.I_s[k + 1]
@@ -121,7 +123,7 @@ class CrossInterpolationDMRG(CrossInterpolation):
         else:
             ind = np.argmax(y)
         y_opt_curr = y[ind]
-        self.opt_trajectory[i2s(I[ind, :])] = y_opt_curr
+        self.opt_trajectory.append((i2s(I[ind, :]), y_opt_curr, self.black_box.evals, get_max_D(self.mps)))
         if is_min and y_opt is not None and y_opt_curr >= y_opt:
             return i_opt, y_opt
         if not is_min and y_opt is not None and y_opt_curr <= y_opt:
@@ -286,7 +288,9 @@ class CrossInterpolationDMRG(CrossInterpolation):
             cache=self.cache,
         )
 
-    def optimize(self, is_min : bool =True,
+    def optimize(self, is_min : bool = True,
+                 max_func_evals : int = 10000,
+                 forward : bool = True,
         callback: Callable | None = None,
     ) -> CrossResults:
         """
@@ -296,8 +300,12 @@ class CrossInterpolationDMRG(CrossInterpolation):
 
         Parameters
         ----------
-        is min : bool, optional
+        is_min : bool, optional
             If True the minimum is returned.
+        max_func_evals : int, default=10000
+            Maximum number of function evaluations.
+        forward : bool, optional
+            If True, first pass is forward.
         callback : Callable, optional
             A callable called on the MPS after each iteration.
             The output of the callback is included in a list 'callback_output' in CrossResults.
@@ -316,35 +324,39 @@ class CrossInterpolationDMRG(CrossInterpolation):
             for i in range(self.cross_strategy.maxiter):
                 stop = False
                 # Forward sweep
-                forward = True
-                for k in range(self.sites - 1):
-                    self._update_dmrg_opt(k, forward, is_min)
-                    if self.black_box.evals > self.cross_strategy.max_func_evals:
-                        stop=True
+                if forward:
+                    for k in range(self.sites - 1):
+                        self._update_dmrg_opt(k, forward, is_min)
+                        if self.black_box.evals > max_func_evals:
+                            stop=True
+                            break
+                    forward = not forward
+                    if callback:
+                        callback_output.append(callback(self.mps, logger=logger))
+                    if stop:
                         break
-                if callback:
-                    callback_output.append(callback(self.mps, logger=logger))
-                if stop:
-                    break
-                #if converged := _check_convergence(self, i, self.cross_strategy, logger) or stop:
-                    #break
+                    #if converged := _check_convergence(self, i, self.cross_strategy, logger) or stop:
+                        #break
                 # Backward sweep
-                forward = False
-                for k in reversed(range(self.sites - 1)):
-                    self._update_dmrg_opt(k, forward, is_min)
-                    if self.black_box.evals > self.cross_strategy.max_func_evals:
-                        stop=True
+                else:
+                    for k in reversed(range(self.sites - 1)):
+                        self._update_dmrg_opt(k, forward, is_min)
+                        if self.black_box.evals > max_func_evals:
+                            stop=True
+                            break
+                    forward = not forward
+                    if callback:
+                        callback_output.append(callback(self.mps, logger=logger))
+                    #if converged := _check_convergence(self, i, self.cross_strategy, logger) or stop:
+                        #break
+                    if stop:
                         break
-                if callback:
-                    callback_output.append(callback(self.mps, logger=logger))
-                #if converged := _check_convergence(self, i, self.cross_strategy, logger) or stop:
-                    #break
-                if stop:
-                    break
             if not converged:
                 logger("Maximum number of TT-Cross iterations reached")
         evals = self.black_box.evals
         points = self.indices_to_points(forward)
+        dtype = [('idx', 'U50'), ('F', 'f8'), ('evals', 'i4'), ('max_D', 'i4')]
+        self.opt_trajectory = np.array(self.opt_trajectory, dtype)
         return CrossResults(
             mps=self.mps,
             points=points,

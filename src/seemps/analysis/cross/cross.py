@@ -71,8 +71,8 @@ class CrossResults:
         the interpolation.
     callback_output : VectorLike, optional
         An array collecting the results of the callback function, called at each iteration.
-    opt_trajectory : Dict, optional
-        A dictionary containing the optimum value  of for each iteration.
+    opt_trajectory : np.ndarray, optional
+        An array of (idx, func(idx), evals) for each iteration.
     i_opt : VectorLike, optional
         Indices for the optimum value.
     y_opt : float, optional
@@ -85,7 +85,7 @@ class CrossResults:
     evals: int
     points: np.ndarray
     callback_output: VectorLike | None = None
-    opt_trajectory: Dict | None = None
+    opt_trajectory: np.ndarray | None = None
     i_opt: VectorLike | None = None
     y_opt: float | None = None
     cache: Dict | None = None
