@@ -83,7 +83,7 @@ class CrossResults:
 
     mps: MPS
     evals: int
-    points: np.ndarray
+    points: np.ndarray | None = None
     callback_output: VectorLike | None = None
     opt_trajectory: np.ndarray | None = None
     i_opt: VectorLike | None = None

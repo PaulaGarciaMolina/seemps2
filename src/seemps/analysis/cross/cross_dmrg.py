@@ -74,10 +74,10 @@ class CrossInterpolationDMRG(CrossInterpolation):
         self.i_opt = None
         self.y_opt = None
         self.opt_trajectory = []
+        self.k = None
+        self.forward = None
     def refresh(self):
         self.cache = {}
-        self.i_opt = None
-        self.y_opt = None
         self.opt_trajectory = []
         self.black_box.evals = 0
     def sample_superblock(self, k: int) -> np.ndarray:
@@ -319,7 +319,6 @@ class CrossInterpolationDMRG(CrossInterpolation):
 
         converged = False
         callback_output = []
-        forward = True
         with make_logger(2) as logger:
             for i in range(self.cross_strategy.maxiter):
                 stop = False
@@ -329,11 +328,14 @@ class CrossInterpolationDMRG(CrossInterpolation):
                         self._update_dmrg_opt(k, forward, is_min)
                         if self.black_box.evals > max_func_evals:
                             stop=True
+                            self.forward = forward
+                            self.k = k + 1
                             break
                     forward = not forward
                     if callback:
                         callback_output.append(callback(self.mps, logger=logger))
                     if stop:
+                        logger("Maximum number of evaluations reached")
                         break
                     #if converged := _check_convergence(self, i, self.cross_strategy, logger) or stop:
                         #break
@@ -343,6 +345,8 @@ class CrossInterpolationDMRG(CrossInterpolation):
                         self._update_dmrg_opt(k, forward, is_min)
                         if self.black_box.evals > max_func_evals:
                             stop=True
+                            self.forward = forward
+                            self.k = k - 1
                             break
                     forward = not forward
                     if callback:
@@ -350,9 +354,103 @@ class CrossInterpolationDMRG(CrossInterpolation):
                     #if converged := _check_convergence(self, i, self.cross_strategy, logger) or stop:
                         #break
                     if stop:
+                        logger("Maximum number of evaluations reached")
                         break
-            if not converged:
+            if not converged and not stop:
                 logger("Maximum number of TT-Cross iterations reached")
+        evals = self.black_box.evals
+        #points = self.indices_to_points(forward)
+        dtype = [('idx', 'U50'), ('F', 'f8'), ('evals', 'i4'), ('max_D', 'i4')]
+        self.opt_trajectory = np.array(self.opt_trajectory, dtype)
+        return CrossResults(
+            mps=self.mps,
+            evals=evals,
+            callback_output=callback_output,
+            cache=self.cache,
+            opt_trajectory=self.opt_trajectory,
+            i_opt=self.i_opt,
+            y_opt=self.y_opt
+        )
+    
+    def reoptimize(self, is_min : bool = True,
+                 max_func_evals : int = 10000,
+                 forward : bool = True,
+        callback: Callable | None = None,
+    ) -> CrossResults:
+        """
+        Computes the MPS representation of a black-box function using the tensor cross-approximation (TCI)
+        algorithm based on two-site optimizations in a DMRG-like manner.
+        The black-box function can represent several different structures. See `black_box` for usage examples.
+
+        Parameters
+        ----------
+        is_min : bool, optional
+            If True the minimum is returned.
+        max_func_evals : int, default=10000
+            Maximum number of function evaluations.
+        forward : bool, optional
+            If True, first pass is forward.
+        callback : Callable, optional
+            A callable called on the MPS after each iteration.
+            The output of the callback is included in a list 'callback_output' in CrossResults.
+        Returns
+        -------
+        CrossResults
+            A dataclass containing the MPS representation of the black-box function,
+            among other useful information.
+        """
+        self.refresh()
+        converged = False
+        callback_output = []
+        forward = self.forward
+        with make_logger(2) as logger:
+            for i in range(self.cross_strategy.maxiter):
+                stop = False
+                # Forward sweep
+                if forward:
+                    if i == 0:
+                        start_k = self.k 
+                    else:
+                        start_k = 0
+                    for k in range(start_k, self.sites - 1):
+                        self._update_dmrg_opt(k, forward, is_min)
+                        if self.black_box.evals > max_func_evals:
+                            stop=True
+                            self.forward = forward
+                            self.k = k + 1
+                            break
+                    forward = not forward
+                    if callback:
+                        callback_output.append(callback(self.mps, logger=logger))
+                    if stop:
+                        logger("Maximum number of evaluations reached")
+                        break
+                    #if converged := _check_convergence(self, i, self.cross_strategy, logger) or stop:
+                        #break
+                # Backward sweep
+                else:
+                    if i == 0:
+                        start_k = self.k + 1
+                    else:
+                        start_k = self.sites - 1
+                    for k in reversed(range(start_k)):
+                        self._update_dmrg_opt(k, forward, is_min)
+                        if self.black_box.evals > max_func_evals:
+                            stop=True
+                            self.forward = forward
+                            self.k = k - 1
+                            break
+                    forward = not forward
+                    if callback:
+                        callback_output.append(callback(self.mps, logger=logger))
+                    #if converged := _check_convergence(self, i, self.cross_strategy, logger) or stop:
+                        #break
+                    if stop:
+                        logger("Maximum number of evaluations reached")
+                        break
+            if not converged and not stop:
+                logger("Maximum number of TT-Cross iterations reached")
+
         evals = self.black_box.evals
         points = self.indices_to_points(forward)
         dtype = [('idx', 'U50'), ('F', 'f8'), ('evals', 'i4'), ('max_D', 'i4')]
@@ -367,3 +465,5 @@ class CrossInterpolationDMRG(CrossInterpolation):
             i_opt=self.i_opt,
             y_opt=self.y_opt
         )
+    
+
