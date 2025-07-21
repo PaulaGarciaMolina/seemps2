@@ -19,6 +19,7 @@ from scipy.linalg import svd
 from ...state.core import destructively_truncate_vector
 from ...truncate import SIMPLIFICATION_STRATEGY
 from ...tools import make_logger
+from scipy.stats import qmc
 
 DEFAULT_CROSS_STRATEGY = SIMPLIFICATION_STRATEGY.replace(
     normalize=False,
@@ -31,6 +32,12 @@ DEFAULT_CROSS_STRATEGY = SIMPLIFICATION_STRATEGY.replace(
 def get_max_D(mps):
     return max([max(t.shape) for t in mps])
 
+def sobol_mps_indices(physical_dimensions, num_indices=1):
+    d = len(physical_dimensions)
+    sampler = qmc.Sobol(d=d, scramble=True)
+    samples = sampler.random(num_indices)
+    indices = (samples * np.array(physical_dimensions)).astype(int)
+    return indices
 
 @dataclass
 class CrossStrategyDMRG(CrossStrategy):
@@ -62,11 +69,17 @@ class CrossInterpolationDMRG(CrossInterpolation):
     ):
         self.cross_strategy = cross_strategy  # Make sure this is set first
         if initial_point is None:
-            initial_point = random_mps_indices(
+            if False:
+                initial_point = random_mps_indices(
+                    black_box.physical_dimensions,
+                    num_indices=1,
+                    allowed_indices=getattr(black_box, "allowed_indices", None),
+                    rng=self.cross_strategy.rng,
+                )
+
+            initial_point = sobol_mps_indices(
                 black_box.physical_dimensions,
                 num_indices=1,
-                allowed_indices=getattr(black_box, "allowed_indices", None),
-                rng=self.cross_strategy.rng,
             )
         super().__init__(black_box, initial_point)
         self.with_cache = with_cache
@@ -76,6 +89,7 @@ class CrossInterpolationDMRG(CrossInterpolation):
         self.opt_trajectory = []
         self.k = None
         self.forward = None
+        self.iter = 0
     def refresh(self):
         self.cache = {}
         self.opt_trajectory = []
@@ -111,9 +125,12 @@ class CrossInterpolationDMRG(CrossInterpolation):
         )
         return evals, mps_indices
     
-    def smooth_func(self, y, y0=0., opt=1.):
+    def smooth_func(self, y, y0=0.):
         """Smooth function that transforms max to min."""
-        return np.pi/2 - np.arctan(y - y0)
+        #return np.pi/2 - np.arctan(y - y0)
+        delta = np.clip(y0 - y, -100, 100)
+        tau = max(0.1, 1.0 * 0.95**self.iter)  # Decay tau over time
+        return np.exp(delta / tau)
     
     def find_opt(self, I, y, i_opt, y_opt, is_min=True):
         """Find the minimum or maximum value on a set of sampled points."""
@@ -148,9 +165,8 @@ class CrossInterpolationDMRG(CrossInterpolation):
         if forward:
             if k < self.sites - 2:
                 C = U.reshape(r_l * s1, r)
-                Q, _ = scipy.linalg.qr(
-                    C, mode="economic", overwrite_a=True, check_finite=False
-                )  # type: ignore
+                #Q, _ = scipy.linalg.qr(C, mode="economic", overwrite_a=True, check_finite=False)  # type: ignore
+                Q = np.linalg.qr(C)
                 I, G = maxvol_square(
                     Q,
                     self.cross_strategy.maxiter_maxvol_square,
@@ -165,9 +181,8 @@ class CrossInterpolationDMRG(CrossInterpolation):
         else:
             if k > 0:
                 R = V.reshape(r, s2 * r_g)
-                Q, _ = scipy.linalg.qr(  # type: ignore
-                    R.T, mode="economic", overwrite_a=True, check_finite=False
-                )
+                #Q, _ = scipy.linalg.qr(R.T, mode="economic", overwrite_a=True, check_finite=False)
+                Q, _ = scipy.linalg.qr(R.T)
                 I, G = maxvol_square(
                     Q,
                     self.cross_strategy.maxiter_maxvol_square,
@@ -186,6 +201,7 @@ class CrossInterpolationDMRG(CrossInterpolation):
         forward: bool,
         is_min: bool=True
     ) -> None:
+        self.iter += 1
         superblock, mps_indices = self.sample_superblock(k)
         if self.y_opt is None:
             self.y_opt = np.inf if is_min else -np.inf
