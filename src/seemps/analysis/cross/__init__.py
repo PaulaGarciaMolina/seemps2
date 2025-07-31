@@ -4,7 +4,7 @@ from .black_box import (
     BlackBoxLoadMPO,
     BlackBoxComposeMPS,
 )
-from .cross_maxvol import cross_maxvol, CrossStrategyMaxvol
+from .cross_maxvol import CrossInterpolationMaxvol, CrossStrategyMaxvol
 from .cross_dmrg import CrossInterpolationDMRG, CrossStrategyDMRG
 from .cross_greedy import cross_greedy, CrossStrategyGreedy
 
