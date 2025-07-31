@@ -21,7 +21,6 @@ from .factories import (
     spin_wave,
     W,
 )
-from . import entropies, sampling
 from .environments import scprod
 
 __all__ = [
@@ -36,8 +35,6 @@ __all__ = [
     "MPS",
     "MPSSum",
     "CanonicalMPS",
-    "entropies",
-    "sampling",
     "AKLT",
     "GHZ",
     "graph_state",

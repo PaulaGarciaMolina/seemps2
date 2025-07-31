@@ -20,12 +20,12 @@ from .antilinear import AntilinearForm
 # form of either the guess or the state.
 
 SIMPLIFICATION_STRATEGY = Strategy(
-    method=Truncation.RELATIVE_NORM_SQUARED_ERROR,
+    method=Truncation.RELATIVE_NORM_SQUARED_ERROR.value,
     tolerance=DEFAULT_TOLERANCE,
     max_bond_dimension=MAX_BOND_DIMENSION,
     normalize=True,
     max_sweeps=4,
-    simplify=Simplification.VARIATIONAL,
+    simplify=Simplification.VARIATIONAL.value,
 )
 
 

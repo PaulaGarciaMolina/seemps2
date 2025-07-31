@@ -1,14 +1,6 @@
 from __future__ import annotations
 import torch
 from ..typing import Weight, Tensor3, Tensor4, MPOEnvironment
-from .core import (
-    _begin_environment,
-    _update_left_environment,
-    _update_right_environment,
-    _end_environment,
-    _join_environments,
-    scprod,
-)
 
 
 def begin_mpo_environment() -> MPOEnvironment:
@@ -56,18 +48,3 @@ def end_mpo_environment(ρ: MPOEnvironment) -> Weight:
 def join_mpo_environments(left: MPOEnvironment, right: MPOEnvironment) -> Weight:
     """Join two MPO environments by computing their dot product."""
     return torch.dot(left.reshape(-1), right.reshape(-1)).item()
-
-
-__all__ = [
-    "_begin_environment",
-    "_update_left_environment",
-    "_update_right_environment",
-    "_end_environment",
-    "_join_environments",
-    "scprod",
-    "begin_mpo_environment",
-    "update_left_mpo_environment",
-    "update_right_mpo_environment",
-    "end_mpo_environment",
-    "join_mpo_environments",
-]

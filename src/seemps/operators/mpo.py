@@ -33,7 +33,7 @@ def _mpo_multiply_tensor(A: Tensor4, B: Tensor3):
     c, j, d = B.shape
     # torch.matmul(...) -> C(a,i,b,c,d)
     return torch.matmul(
-        B.transpose(0, 2, 1).reshape(c, 1, 1, d, j), A.reshape(1, a, i, j, b)
+        B.permute(0, 2, 1).reshape(c, 1, 1, d, j), A.reshape(1, a, i, j, b)
     ).reshape(c * a, i, d * b)
 
 
@@ -142,7 +142,7 @@ class MPO(TensorArray):
 
     @property
     def T(self) -> MPO:
-        return MPO([A.transpose(0, 2, 1, 3) for A in self], self.strategy)
+        return MPO([A.permute(0, 2, 1, 3) for A in self], self.strategy)
 
     def tomatrix(self) -> DenseOperator:
         """Convert this MPO to a dense or sparse matrix."""

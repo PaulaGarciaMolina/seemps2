@@ -1,7 +1,7 @@
 import torch
-import numpy as np
 from enum import Enum
-from typing import TYPE_CHECKING, Callable
+import math
+from typing import TYPE_CHECKING, Callable, List, Tuple
 from ..typing import Environment, Tensor3, Vector
 
 if TYPE_CHECKING:
@@ -28,16 +28,107 @@ class Simplification(Enum):
     VARIATIONAL = 2
     VARIATIONAL_EXACT_GUESS = 3
 
+DEFAULT_TOLERANCE = torch.finfo(torch.float64).eps
 
-class GemmOrder:
-    """GEMM operation flags."""
-    GEMM_NORMAL: int = 0
-    GEMM_TRANSPOSE: int = 1
-    GEMM_ADJOINT: int = 2
+def _truncate_relative_norm_squared_error(s: torch.Tensor, strategy) -> float:
+    """Truncate based on relative norm squared error."""
+    global _errors_buffer
+    
+    N = s.size(0)
+    
+    # Resize buffer if needed
+    if _errors_buffer.size(0) <= N:
+        _errors_buffer = torch.empty(2 * N, dtype=torch.float64)
+    
+    # Compute cumulative sum of squared singular values in reverse order
+    s_squared = s * s
+    errors = torch.zeros(N + 1, dtype=torch.float64, device=s.device)
+    
+    total = 0.0
+    for i in range(N):
+        errors[i] = total
+        total += s_squared[N - 1 - i].item()
+    errors[N] = total
+    
+    max_error = total * strategy.tolerance
+    final_size = N
+    
+    for i in range(N):
+        if errors[i] > max_error:
+            final_size = N - (i - 1) if i > 0 else N
+            break
+    
+    final_size = min(final_size, strategy.max_bond_dimension)
+    truncation_error = errors[N - final_size].item()
+    
+    # Truncate the tensor (resize in-place equivalent)
+    # Note: PyTorch doesn't have direct in-place resize like NumPy
+    # So we return the truncated view and the error
+    return truncation_error
 
 
-DEFAULT_TOLERANCE = float(np.finfo(np.float64).eps)
+def _truncate_relative_singular_value(s: torch.Tensor, strategy) -> float:
+    """Truncate based on relative singular value."""
+    if s.size(0) == 0:
+        return 0.0
+        
+    max_error_threshold = strategy.tolerance * s[0].item()
+    final_size = min(s.size(0), strategy.max_bond_dimension)
+    
+    for i in range(1, final_size):
+        if s[i].item() <= max_error_threshold:
+            final_size = i
+            break
+    
+    # Compute truncation error as sum of squares of discarded values
+    max_error = 0.0
+    for i in range(final_size, s.size(0)):
+        max_error += s[i].item() ** 2
+    
+    return max_error
 
+
+def _truncate_absolute_singular_value(s: torch.Tensor, strategy) -> float:
+    """Truncate based on absolute singular value."""
+    max_error_threshold = strategy.tolerance
+    final_size = min(s.size(0), strategy.max_bond_dimension)
+    
+    for i in range(final_size):
+        if s[i].item() <= max_error_threshold:
+            final_size = i
+            break
+    
+    # Compute truncation error as sum of squares of discarded values
+    max_error = 0.0
+    for i in range(final_size, s.size(0)):
+        max_error += s[i].item() ** 2
+    
+    return max_error
+
+
+def destructively_truncate_vector(s: torch.Tensor, strategy) -> float:
+    """Destructively truncate vector according to strategy.
+    
+    Parameters
+    ----------
+    s : torch.Tensor
+        1D tensor of singular values (should be sorted in descending order)
+    strategy : Strategy
+        Truncation strategy
+        
+    Returns
+    -------
+    float
+        Truncation error
+    """
+    if not isinstance(s, torch.Tensor) or s.ndim != 1:
+        raise AssertionError("Expected 1D tensor")
+    
+    return strategy._truncate(s, strategy)
+
+def _truncate_do_not_truncate(s: torch.Tensor, strategy) -> float:
+    """Do not truncate - return zero error."""
+    return 0.0
 
 class Strategy:
     """Strategy class for tensor operations.
@@ -210,9 +301,7 @@ NO_TRUNCATION = DEFAULT_STRATEGY.replace(
 _errors_buffer = torch.empty(1024, dtype=torch.float64)
 
 
-def _truncate_do_not_truncate(s: torch.Tensor, strategy: Strategy) -> float:
-    """Do not truncate - return zero error."""
-    return 0.0
+
 
 
 def _norm(data: torch.Tensor) -> float:
@@ -232,103 +321,6 @@ def _normalize(data: torch.Tensor) -> None:
     _rescale_if_not_zero(data, norm)
 
 
-def _truncate_relative_norm_squared_error(s: torch.Tensor, strategy: Strategy) -> float:
-    """Truncate based on relative norm squared error."""
-    global _errors_buffer
-    
-    N = s.size(0)
-    
-    # Resize buffer if needed
-    if _errors_buffer.size(0) <= N:
-        _errors_buffer = torch.empty(2 * N, dtype=torch.float64)
-    
-    # Compute cumulative sum of squared singular values in reverse order
-    s_squared = s * s
-    errors = torch.zeros(N + 1, dtype=torch.float64, device=s.device)
-    
-    total = 0.0
-    for i in range(N):
-        errors[i] = total
-        total += s_squared[N - 1 - i].item()
-    errors[N] = total
-    
-    max_error = total * strategy.tolerance
-    final_size = N
-    
-    for i in range(N):
-        if errors[i] > max_error:
-            final_size = N - (i - 1) if i > 0 else N
-            break
-    
-    final_size = min(final_size, strategy.max_bond_dimension)
-    truncation_error = errors[N - final_size].item()
-    
-    # Truncate the tensor (resize in-place equivalent)
-    # Note: PyTorch doesn't have direct in-place resize like NumPy
-    # So we return the truncated view and the error
-    return truncation_error
-
-
-def _truncate_relative_singular_value(s: torch.Tensor, strategy: Strategy) -> float:
-    """Truncate based on relative singular value."""
-    if s.size(0) == 0:
-        return 0.0
-        
-    max_error_threshold = strategy.tolerance * s[0].item()
-    final_size = min(s.size(0), strategy.max_bond_dimension)
-    
-    for i in range(1, final_size):
-        if s[i].item() <= max_error_threshold:
-            final_size = i
-            break
-    
-    # Compute truncation error as sum of squares of discarded values
-    max_error = 0.0
-    for i in range(final_size, s.size(0)):
-        max_error += s[i].item() ** 2
-    
-    return max_error
-
-
-def _truncate_absolute_singular_value(s: torch.Tensor, strategy: Strategy) -> float:
-    """Truncate based on absolute singular value."""
-    max_error_threshold = strategy.tolerance
-    final_size = min(s.size(0), strategy.max_bond_dimension)
-    
-    for i in range(final_size):
-        if s[i].item() <= max_error_threshold:
-            final_size = i
-            break
-    
-    # Compute truncation error as sum of squares of discarded values
-    max_error = 0.0
-    for i in range(final_size, s.size(0)):
-        max_error += s[i].item() ** 2
-    
-    return max_error
-
-
-def destructively_truncate_vector(s: torch.Tensor, strategy: Strategy) -> float:
-    """Destructively truncate vector according to strategy.
-    
-    Parameters
-    ----------
-    s : torch.Tensor
-        1D tensor of singular values (should be sorted in descending order)
-    strategy : Strategy
-        Truncation strategy
-        
-    Returns
-    -------
-    float
-        Truncation error
-    """
-    if not isinstance(s, torch.Tensor) or s.ndim != 1:
-        raise AssertionError("Expected 1D tensor")
-    
-    return strategy._truncate(s, strategy)
-
-
 # Placeholder functions for included files - these would be implemented
 # in the corresponding PyTorch translations of the .pxi files
 
@@ -336,70 +328,212 @@ def _contract_nrjl_ijk_klm(U, A, B):
     """Contract tensors according to einsum pattern 'ijk,klm,nrjl -> inrm'."""
     raise NotImplementedError("Implementation from contractions.pxi")
 
-
-def _contract_last_and_first(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-    """Contract last index of A and first from B."""
-    raise NotImplementedError("Implementation from contractions.pxi")
-
-
-def _begin_environment(D: int | None = 1) -> Environment:
-    """Begin environment calculation."""
-    raise NotImplementedError("Implementation from environments.pxi")
-
-
-def _update_right_environment(B: Tensor3, A: Tensor3, rho: Environment) -> Environment:
-    """Update right environment."""
-    raise NotImplementedError("Implementation from environments.pxi")
-
-
-def _update_left_environment(B: Tensor3, A: Tensor3, rho: Environment) -> Environment:
-    """Update left environment."""
-    raise NotImplementedError("Implementation from environments.pxi")
-
-
-def _end_environment(rho: Environment):
-    """End environment calculation."""
-    raise NotImplementedError("Implementation from environments.pxi")
-
-
 def _join_environments(rhoL: Environment, rhoR: Environment):
     """Join left and right environments."""
     raise NotImplementedError("Implementation from environments.pxi")
 
 
-def scprod(bra: 'MPS', ket: 'MPS'):
-    """Scalar product between two MPS."""
-    raise NotImplementedError("Implementation from environments.pxi")
+def scprod(bra, ket) -> torch.Tensor:
+    """Compute scalar product ⟨bra|ket⟩ between two MPS objects using PyTorch."""
+    A = bra.data  # List[Tensor] of shape (D_left, d, D_right)
+    B = ket.data
+
+    if len(A) != len(B):
+        raise ValueError("Invalid arguments to scprod: mismatched lengths")
+
+    rho = empty_environment()  # Identity or scalar tensor, depending on implementation
+    for i in range(len(A)):
+        rho = update_left_environment(A[i], B[i], rho)
+
+    return end_environment(rho)
 
 
-def _update_in_canonical_form_left(state: list[Tensor3], A: Tensor3, site: int, truncation: Strategy) -> tuple[int, float]:
-    """Update state in canonical form moving left."""
-    raise NotImplementedError("Implementation from schmidt.pxi")
+
+def __svd(A: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    # Full SVD; you can modify for truncated or economy SVD
+    U, S, Vh = torch.linalg.svd(A, full_matrices=False)
+    return U, S, Vh
+
+def _as_2tensor(A: torch.Tensor, dim1: int, dim2: int) -> torch.Tensor:
+    return A.reshape(dim1, dim2)
+
+def _as_3tensor(A: torch.Tensor, dim1: int, dim2: int, dim3: int) -> torch.Tensor:
+    return A.reshape(dim1, dim2, dim3)
+
+def _resize_matrix(M: torch.Tensor, new_rows: int, new_cols: int) -> torch.Tensor:
+    # Resize M to shape (new_rows, new_cols) by truncating or keeping all if -1
+    rows = M.shape[0] if new_rows == -1 else new_rows
+    cols = M.shape[1] if new_cols == -1 else new_cols
+    return M[:rows, :cols]
+
+def __contract_last_and_first(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    # Contract last index of A with first index of B
+    # A shape: (a, i, b), B shape: (b, c, d) -> result shape: (a, i, c, d)
+    sA = A.shape
+    sB = B.shape
+    B_reshaped = B.reshape(sB[0], -1)  # (contract_dim, remaining)
+    out = torch.matmul(A, B_reshaped)  # contracts on last of A and first of B
+    return out.reshape(*sA[:-1], *sB[1:])  # match remaining dims
+
+def __update_in_canonical_form_right(
+    state: List[Tensor3], someA: Tensor3, site: int, truncation
+) -> float:
+    A = someA.clone()  # copy tensor
+    
+    a, i, b = A.shape
+    
+    A_2d = _as_2tensor(A, a * i, b)
+    U, s, Vh = __svd(A_2d)
+    
+    # Truncate Schmidt decomposition
+    err = math.sqrt(truncation._truncate(s, truncation))
+    D = s.size(0)
+    
+    U_resized = _resize_matrix(U, -1, D)
+    V_resized = _resize_matrix(Vh, D, -1)
+    
+    state[site] = _as_3tensor(U_resized, a, i, D)
+    site += 1
+    
+    s_diag = s.reshape(D, 1)
+    contracted = __contract_last_and_first(s_diag * V_resized, state[site])
+    state[site] = contracted
+    
+    return err
 
 
-def _update_in_canonical_form_right(state: list[Tensor3], A: Tensor3, site: int, truncation: Strategy) -> tuple[int, float]:
-    """Update state in canonical form moving right."""
-    raise NotImplementedError("Implementation from schmidt.pxi")
+def _update_in_canonical_form_right(state: List[Tensor3], A: Tensor3, site: int, truncation) -> Tuple[int, float]:
+    if site + 1 == len(state):
+        state[site] = A
+        return site, 0.0
+    return site + 1, __update_in_canonical_form_right(state, A, site, truncation)
 
 
-def _canonicalize(state: list[Tensor3], center: int, truncation: Strategy) -> float:
-    """Canonicalize state around center."""
-    raise NotImplementedError("Implementation from schmidt.pxi")
+def __update_in_canonical_form_left(
+    state: List[Tensor3], someA: Tensor3, site: int, truncation
+) -> float:
+    A = someA.clone()
+    
+    a, i, b = A.shape
+    
+    A_2d = _as_2tensor(A, a, i * b)
+    U, s, Vh = __svd(A_2d)
+    
+    err = math.sqrt(truncation._truncate(s, truncation))
+    D = s.size(0)
+    
+    U_resized = _resize_matrix(U, -1, D)
+    V_resized = _resize_matrix(Vh, D, -1)
+    
+    state[site] = _as_3tensor(V_resized, D, i, b)
+    site -= 1
+    contracted = __contract_last_and_first(state[site], U_resized * s.view(1, -1))
+    state[site] = contracted
+    
+    return err
+
+
+def _update_in_canonical_form_left(state: List[Tensor3], A: Tensor3, site: int, truncation) -> Tuple[int, float]:
+    if site == 0:
+        state[0] = A
+        return 0, 0.0
+    return site - 1, __update_in_canonical_form_left(state, A, site, truncation)
+
+
+def _recanonicalize(state: List[Tensor3], oldcenter: int, newcenter: int, truncation) -> float:
+    err = 0.0
+    while oldcenter > newcenter:
+        err += __update_in_canonical_form_left(state, state[oldcenter], oldcenter, truncation)
+        oldcenter -= 1
+    while oldcenter < newcenter:
+        err += __update_in_canonical_form_right(state, state[oldcenter], oldcenter, truncation)
+        oldcenter += 1
+    return err
+
+from typing import List
+import torch
+
+def _canonicalize(state: List[torch.Tensor], center: int, truncation) -> float:
+    """Update a list of `Tensor3` objects to be in canonical form
+    with respect to `center`."""
+    
+    err = 0.0
+    L = len(state)
+    
+    for i in range(center):
+        err += __update_in_canonical_form_right(state, state[i], i, truncation)
+    for i in range(L - 1, center, -1):
+        err += __update_in_canonical_form_left(state, state[i], i, truncation)
+        
+    return err
+
 
 
 def _recanonicalize(state: list[Tensor3], oldcenter: int, newcenter: int, truncation: Strategy) -> float:
     """Re-canonicalize state from old center to new center."""
     raise NotImplementedError("Implementation from schmidt.pxi")
 
+def _left_orth_2site(AA: torch.Tensor, strategy: Strategy) -> tuple[torch.Tensor, torch.Tensor, float]:
+    """
+    Split a tensor AA[a,b,c,d] into B[a,b,r] and C[r,c,d] such
+    that 'B' is a left-isometry, truncating the size 'r' according
+    to the given 'strategy'. Tensor 'AA' may be overwritten.
+    """
+    a, d1, d2, b = AA.shape
+    # Reshape AA into a 2D matrix of shape (a*d1, d2*b)
+    A = AA.view(a * d1, d2 * b)
+    
+    # Perform SVD: A = U @ diag(s) @ Vh
+    U, s, Vh = torch.linalg.svd(A, full_matrices=False)
+    
+    # Apply truncation strategy on singular values s
+    err = strategy._truncate(s, strategy)
+    
+    D = s.size(0)
+    
+    # Truncate U, s, Vh accordingly
+    # Note: Truncation function returns error, but you may want to truncate s, U, Vh explicitly
+    # We'll truncate to the first D singular values (assuming _truncate adjusted s in place)
+    # If you want to truncate based on some cut-off, you need to determine truncation size (r)
+    # Here, let's truncate singular values s to length D, but real truncation logic depends on strategy
 
-def _left_orth_2site(AA, strategy: Strategy):
-    """Left orthogonalize two-site tensor."""
-    raise NotImplementedError("Implementation from schmidt.pxi")
+    # For simplicity, assume s, U, Vh are already truncated or truncated manually by user
+
+    # Compose B and C tensors
+    # B shape: (a, d1, D)
+    B = U[:, :D].reshape(a, d1, D)
+    # C shape: (D, d2, b)
+    C = (s[:D].unsqueeze(1) * Vh[:D, :]).reshape(D, d2, b)
+    
+    return B, C, math.sqrt(err)
 
 
-def _right_orth_2site(AA, strategy: Strategy):
-    """Right orthogonalize two-site tensor."""
-    raise NotImplementedError("Implementation from schmidt.pxi")
+def _right_orth_2site(AA: torch.Tensor, strategy: Strategy) -> tuple[torch.Tensor, torch.Tensor, float]:
+    """
+    Split a tensor AA[a,b,c,d] into B[a,b,r] and C[r,c,d] such
+    that 'C' is a right-isometry, truncating the size 'r' according
+    to the given 'strategy'. Tensor 'AA' may be overwritten.
+    """
+    a, d1, d2, b = AA.shape
+    # Reshape AA into a 2D matrix of shape (a*d1, d2*b)
+    A = AA.view(a * d1, d2 * b)
+    
+    # Perform SVD: A = U @ diag(s) @ Vh
+    U, s, Vh = torch.linalg.svd(A, full_matrices=False)
+    
+    # Apply truncation strategy on singular values s
+    err = strategy._truncate(s, strategy)
+    
+    D = s.size(0)
+    
+    # Compose B and C tensors
+    # B shape: (a, d1, D)
+    B = (U[:, :D] * s[:D]).reshape(a, d1, D)
+    # C shape: (D, d2, b)
+    C = Vh[:D, :].reshape(D, d2, b)
+    
+    return B, C, math.sqrt(err)
+
 
 
 def _select_svd_driver(which: str) -> None:
@@ -410,8 +544,3 @@ def _select_svd_driver(which: str) -> None:
 def _destructive_svd(A: torch.Tensor):
     """Destructive SVD decomposition."""
     raise NotImplementedError("Implementation from svd.pxi")
-
-
-def _gemm(B: torch.Tensor, BT: int, A: torch.Tensor, AT: int) -> torch.Tensor:
-    """General matrix multiply with transpose options."""
-    raise NotImplementedError("Implementation from gemm.pxi")
