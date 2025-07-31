@@ -166,7 +166,7 @@ class CrossInterpolationDMRG(CrossInterpolation):
             if k < self.sites - 2:
                 C = U.reshape(r_l * s1, r)
                 #Q, _ = scipy.linalg.qr(C, mode="economic", overwrite_a=True, check_finite=False)  # type: ignore
-                Q = np.linalg.qr(C)
+                Q, _ = np.linalg.qr(C)
                 I, G = maxvol_square(
                     Q,
                     self.cross_strategy.maxiter_maxvol_square,
@@ -182,7 +182,7 @@ class CrossInterpolationDMRG(CrossInterpolation):
             if k > 0:
                 R = V.reshape(r, s2 * r_g)
                 #Q, _ = scipy.linalg.qr(R.T, mode="economic", overwrite_a=True, check_finite=False)
-                Q, _ = scipy.linalg.qr(R.T)
+                Q, _ = np.linalg.qr(R.T)
                 I, G = maxvol_square(
                     Q,
                     self.cross_strategy.maxiter_maxvol_square,
@@ -219,9 +219,8 @@ class CrossInterpolationDMRG(CrossInterpolation):
         if forward:
             if k < self.sites - 2:
                 C = U.reshape(r_l * s1, r)
-                Q, _ = scipy.linalg.qr(
-                    C, mode="economic", overwrite_a=True, check_finite=False
-                )  # type: ignore
+                #Q, _ = scipy.linalg.qr(C, mode="economic", overwrite_a=True, check_finite=False)  # type: ignore
+                Q, _ = np.linalg.qr(C)
                 I, G = maxvol_square(
                     Q,
                     self.cross_strategy.maxiter_maxvol_square,
@@ -236,9 +235,8 @@ class CrossInterpolationDMRG(CrossInterpolation):
         else:
             if k > 0:
                 R = V.reshape(r, s2 * r_g)
-                Q, _ = scipy.linalg.qr(  # type: ignore
-                    R.T, mode="economic", overwrite_a=True, check_finite=False
-                )
+                #Q, _ = scipy.linalg.qr(R.T, mode="economic", overwrite_a=True, check_finite=False)
+                Q, _ = np.linalg.qr(R.T)
                 I, G = maxvol_square(
                     Q,
                     self.cross_strategy.maxiter_maxvol_square,
