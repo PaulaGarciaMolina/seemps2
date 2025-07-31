@@ -1,6 +1,6 @@
 from __future__ import annotations
 from math import sqrt
-import numpy as np
+import torch
 from collections.abc import Iterable
 from ..typing import VectorLike, Tensor3
 from .mps import MPS
@@ -27,9 +27,9 @@ def product_state(
     """
 
     def to_tensor(v: VectorLike | Iterable[VectorLike]) -> Tensor3:
-        v = np.asarray(v)
+        v = torch.as_tensor(v)
         assert v.ndim == 1
-        return v.reshape(1, v.size, 1)
+        return v.reshape(1, v.size(0), 1)
 
     if length is not None:
         return MPS([to_tensor(vectors)] * length)  # type: ignore
@@ -40,8 +40,8 @@ def product_state(
 
 def GHZ(n: int) -> MPS:
     """:class:`MPS` representing a GHZ state with `n` qubits."""
-    a = np.zeros((2, 2, 2))
-    b = a.copy()
+    a = torch.zeros((2, 2, 2), dtype=torch.float64)
+    b = a.clone()
     a[0, 0, 0] = a[0, 1, 1] = 1.0 / sqrt(2.0)
     b[0, 0, 0] = 1.0
     b[1, 1, 1] = 1.0
@@ -58,7 +58,7 @@ def W(n: int) -> MPS:
     The W-state is defined as the quantum superpositions of all quantum states
     with a single spin up :math:`\\sum_i \\sigma_i^+ |000\\ldots\\rangle`
     """
-    a = np.zeros((2, 2, 2))
+    a = torch.zeros((2, 2, 2), dtype=torch.float64)
     a[0, 0, 0] = 1.0
     a[0, 1, 1] = 1.0 / sqrt(n)
     a[1, 0, 1] = 1.0
@@ -76,10 +76,10 @@ def spin_wave(state: VectorLike) -> MPS:
     precisely, `spin_wave(f)` represents
     :math:`\\sum_{i=0}^{N-1} f[i] \\sigma^+ |000\\ldots\\rangle`
     """
-    ψ = np.array(state)
-    data = [ψ] * ψ.size
-    for n in range(0, ψ.size):
-        B = np.zeros((2, 2, 2), dtype=ψ.dtype)
+    ψ = torch.as_tensor(state)
+    data = [ψ] * ψ.size(0)
+    for n in range(0, ψ.size(0)):
+        B = torch.zeros((2, 2, 2), dtype=ψ.dtype)
         B[0, 0, 0] = B[1, 0, 1] = 1.0
         B[0, 1, 1] = ψ[n]
         data[n] = B
@@ -94,17 +94,17 @@ def graph_state(n: int) -> MPS:
     # Apply Hadamard H on the left virtual spins
     # (which are the right spins of the entangled bond pairs)
     assert n > 1
-    H = np.array([[1, 1], [1, -1]])
+    H = torch.tensor([[1, 1], [1, -1]], dtype=torch.float64)
     # which gives |0>x(|0>+|1>)+|1>x(|0>-|1>) = |00>+|01>+|10>-|11>
     # Project as  |0><00| + |1><11|
     # We get the following MPS projectors:
-    A0 = np.dot(np.array([[1, 0], [0, 0]]), H)
-    A1 = np.dot(np.array([[0, 0], [0, 1]]), H)
-    AA = np.array([A0, A1])
-    AA = np.swapaxes(AA, 0, 1)
+    A0 = torch.matmul(torch.tensor([[1, 0], [0, 0]], dtype=torch.float64), H)
+    A1 = torch.matmul(torch.tensor([[0, 0], [0, 1]], dtype=torch.float64), H)
+    AA = torch.stack([A0, A1], dim=0)
+    AA = AA.transpose(0, 1)
     data = [AA] * n
-    data[0] = np.dot(np.array([[[1, 0], [0, 1]]]), H)
-    data[-1] = np.swapaxes(np.array([[[1, 0], [0, 1]]]), 0, 2) / sqrt(2**n)
+    data[0] = torch.matmul(torch.tensor([[[1, 0], [0, 1]]], dtype=torch.float64), H)
+    data[-1] = torch.tensor([[[1, 0], [0, 1]]], dtype=torch.float64).transpose(0, 2) / sqrt(2**n)
     return MPS(data)
 
 
@@ -113,20 +113,20 @@ def AKLT(n: int) -> MPS:
     assert n > 1
     # Choose entangled pair state as : |00>+|11>
     # Apply i * Pauli Y matrix on the left virtual spins (which are the right spins of the entangled bond pairs)
-    iY = np.array([[0, 1], [-1, 0]])
+    iY = torch.tensor([[0, 1], [-1, 0]], dtype=torch.float64)
     # which gives -|01>+|10>
     # Project as  |-1><00| +|0> (<01|+ <10|)/ \sqrt(2)+ |1><11|
     # We get the following MPS projectors:
-    A0 = np.dot(np.array([[1, 0], [0, 0]]), iY)
-    A1 = np.dot(np.array([[0, 1], [1, 0]]), iY)
-    A2 = np.dot(np.array([[0, 0], [0, 1]]), iY)
+    A0 = torch.matmul(torch.tensor([[1, 0], [0, 0]], dtype=torch.float64), iY)
+    A1 = torch.matmul(torch.tensor([[0, 1], [1, 0]], dtype=torch.float64), iY)
+    A2 = torch.matmul(torch.tensor([[0, 0], [0, 1]], dtype=torch.float64), iY)
 
-    AA = np.array([A0, A1, A2]) / sqrt(2)
-    AA = np.swapaxes(AA, 0, 1)
+    AA = torch.stack([A0, A1, A2], dim=0) / sqrt(2)
+    AA = AA.transpose(0, 1)
     data = [AA] * n
-    data[-1] = np.array([[[1, 0], [0, 1], [0, 0]]])
-    data[0] = np.array(np.einsum("ijk,kl->ijl", data[-1], iY)) / sqrt(2)
-    data[-1] = np.swapaxes(data[-1], 0, 2)
+    data[-1] = torch.tensor([[[1, 0], [0, 1], [0, 0]]], dtype=torch.float64)
+    data[0] = torch.einsum("ijk,kl->ijl", data[-1], iY) / sqrt(2)
+    data[-1] = data[-1].transpose(0, 2)
 
     return MPS(data)
 
@@ -137,7 +137,7 @@ def random_uniform_mps(
     D: int = 1,
     truncate: bool = True,
     complex: bool = False,
-    rng: np.random.Generator | None = None,
+    rng: torch.Generator | None = None,
 ) -> MPS:
     """Create a random state with `N` elements of dimension `d` and bond
     dimension `D`.
@@ -154,7 +154,7 @@ def random_uniform_mps(
         Do not reach `D` for tensors that do not require it.
     complex : bool, default = False
         If true, return states with complex wavefunctions.
-    rng : np.random.Generator, default = np.random.default_rng()
+    rng : torch.Generator, default = None
         Random number generator used to create the state. Provide a seeded
         generator to ensure reproducibility
 
@@ -171,7 +171,7 @@ def random_mps(
     D: int = 1,
     truncate: bool = True,
     complex: bool = False,
-    rng: np.random.Generator | None = None,
+    rng: torch.Generator | None = None,
 ) -> MPS:
     """Create a random state with `N` elements of dimension `d` and bond
     dimension `D`.
@@ -186,7 +186,7 @@ def random_mps(
         Do not reach `D` for tensors that do not require it.
     complex : bool, default = False
         If true, return states with complex wavefunctions.
-    rng : np.random.Generator, default = np.random.default_rng()
+    rng : torch.Generator, default = None
         Random number generator used to create the state. Provide a seeded
         generator to ensure reproducibility
 
@@ -196,9 +196,9 @@ def random_mps(
         A random matrix-product state.
     """
     N = len(dimensions)
-    mps: list[np.ndarray] = [np.ndarray(())] * N
+    mps: list[torch.Tensor] = [torch.empty(0)] * N
     if rng is None:
-        rng = np.random.default_rng()
+        rng = torch.default_generator
     DR = 1
     if N > 60:
         truncate = False
@@ -207,20 +207,34 @@ def random_mps(
         if not truncate and i != N - 1:
             DR = D
         else:
-            DR = np.min([DR * d, D, d ** (N - i - 1)])
-        T = rng.normal(size=(DL, d, DR))
+            DR = min([DR * d, D, d ** (N - i - 1)])
+        T = torch.randn((DL, d, DR), generator=rng, dtype=torch.float64)
         if complex:
-            mps[i] = T + 1j * rng.normal(size=T.shape)
+            mps[i] = T + 1j * torch.randn(T.shape, generator=rng, dtype=torch.float64)
         else:
             mps[i] = T
     return MPS(mps)
 
 
 def gaussian(n: int, x0: float, w0: float, k0: float) -> MPS:
-    #
-    # Return a W state with `n` components in MPS form or
-    # in vector form
-    #
-    xx = np.arange(n)
-    coefs = np.exp(-((xx - x0) ** 2) / w0**2 + 1j * k0 * xx)
-    return spin_wave(coefs / np.linalg.norm(coefs))
+    """Return a gaussian wavepacket state in MPS form.
+    
+    Parameters
+    ----------
+    n : int
+        Number of sites
+    x0 : float
+        Center position
+    w0 : float
+        Width parameter
+    k0 : float
+        Momentum parameter
+    
+    Returns
+    -------
+    MPS
+        A gaussian wavepacket in spin-wave form
+    """
+    xx = torch.arange(n, dtype=torch.float64)
+    coefs = torch.exp(-((xx - x0) ** 2) / w0**2 + 1j * k0 * xx)
+    return spin_wave(coefs / torch.linalg.norm(coefs))

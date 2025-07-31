@@ -1,5 +1,5 @@
 from __future__ import annotations
-import numpy as np
+import torch
 from math import sqrt
 from collections.abc import Iterable, Sequence
 from typing import cast
@@ -117,9 +117,9 @@ class MPSSum:
         """Join the tensors from all MPS into bigger tensors."""
         As: list[Tensor3] = [s[i] for s in self.states]
         if i == 0:
-            return np.concatenate([w * A for w, A in zip(self.weights, As)], axis=2)
+            return torch.cat([w * A for w, A in zip(self.weights, As)], dim=2)
         if i == L - 1:
-            return np.concatenate(As, axis=0)
+            return torch.cat(As, dim=0)
 
         DL: int = 0
         DR: int = 0
@@ -130,7 +130,7 @@ class MPSSum:
             DL += a
             DR += b
             w += A[0, 0, 0]
-        B = np.zeros((DL, d, DR), dtype=type(w))
+        B = torch.zeros((DL, d, DR), dtype=type(w))
         DL = 0
         DR = 0
         for A in As:
@@ -159,7 +159,8 @@ class MPSSum:
     def conj(self) -> MPSSum:
         """Return the complex-conjugate of this quantum state."""
         return MPSSum(
-            [np.conj(w) for w in self.weights], [state.conj() for state in self.states]
+            [torch.conj(w) if torch.is_tensor(w) else complex(w).conjugate() for w in self.weights], 
+            [state.conj() for state in self.states]
         )
 
     def norm_squared(self) -> float:

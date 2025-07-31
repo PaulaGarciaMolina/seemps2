@@ -98,7 +98,7 @@ def product_expectation(state: MPS, operator_list: list[Operator]) -> Weight:
     rho = _begin_environment()
     for Ai, opi in zip(state, operator_list):
         rho = _update_left_environment(
-            Ai.conj(), np.matmul(to_dense_operator(opi), Ai), rho
+            Ai.conj(), torch.matmul(to_dense_operator(opi), Ai), rho
         )
     return _end_environment(rho)
 

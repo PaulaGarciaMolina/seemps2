@@ -1,7 +1,7 @@
 from __future__ import annotations
 import math
 import warnings
-import numpy as np
+import torch
 from math import sqrt
 from collections.abc import Sequence, Iterable
 from ..tools import InvalidOperation
@@ -46,7 +46,7 @@ class MPS(array.TensorArray):
 
     def __init__(
         self,
-        data: Iterable[np.ndarray],
+        data: Iterable[torch.Tensor],
         error: float = 0,
     ):
         super().__init__(data)
@@ -84,8 +84,8 @@ class MPS(array.TensorArray):
 
         Examples
         --------
-        >>> A = np.ones(1,2,3)
-        >>> B = np.ones(3,2,1)
+        >>> A = torch.ones(1,2,3)
+        >>> B = torch.ones(3,2,1)
         >>> mps = MPS([A, B])
         >>> mps.bond_dimensions()
         [1, 3, 1]
@@ -136,7 +136,7 @@ class MPS(array.TensorArray):
     @classmethod
     def from_tensor(
         cls,
-        state: np.ndarray,
+        state: torch.Tensor,
         strategy: Strategy = DEFAULT_STRATEGY,
         normalize: bool = True,
     ) -> MPS:
@@ -150,7 +150,7 @@ class MPS(array.TensorArray):
 
         Parameters
         ----------
-        state : np.ndarray
+        state : torch.Tensor
             Real or complex tensor with `N` legs.
         strategy : Strategy, default = DEFAULT_STRATEGY
             Default truncation strategy for algorithms working on this state.
@@ -197,9 +197,9 @@ class MPS(array.TensorArray):
             case MPS():
                 return MPS(
                     [
-                        # np.einsum('aib,cid->acibd', A, B)
+                        # torch.einsum('aib,cid->acibd', A, B)
                         (
-                            A[:, np.newaxis, :, :, np.newaxis] * B[:, :, np.newaxis, :]
+                            A.unsqueeze(2).unsqueeze(4) * B.unsqueeze(0).unsqueeze(2)
                         ).reshape(A.shape[0] * B.shape[0], A.shape[1], -1)
                         for A, B in zip(self._data, n._data)
                     ]
@@ -237,7 +237,7 @@ class MPS(array.TensorArray):
 
     def zero_state(self) -> MPS:
         """Return a zero wavefunction with the same physical dimensions."""
-        return MPS([np.zeros((1, A.shape[1], 1)) for A in self._data])
+        return MPS([torch.zeros((1, A.shape[1], 1), dtype=A.dtype, device=A.device) for A in self._data])
 
     def expectation1(self, O: Operator, site: int) -> Weight:
         """Compute the expectation value :math:`\\langle\\psi|O_i|\\psi\\rangle`
@@ -259,7 +259,8 @@ class MPS(array.TensorArray):
         """
         ρL = self.left_environment(site)
         A = self[site]
-        OL = _update_left_environment(A, np.matmul(to_dense_operator(O), A), ρL)
+        # np.matmul(to_dense_operator(O), A)
+        OL = _update_left_environment(A, torch.matmul(to_dense_operator(O), A), ρL)
         ρR = self.right_environment(site)
         return _join_environments(OL, ρR)
 
@@ -297,9 +298,9 @@ class MPS(array.TensorArray):
         for ndx in range(i, j + 1):
             A = self[ndx]
             if ndx == i:
-                OQL = _update_left_environment(A, np.matmul(Opi, A), OQL)
+                OQL = _update_left_environment(A, torch.matmul(Opi, A), OQL)
             elif ndx == j:
-                OQL = _update_left_environment(A, np.matmul(Opj, A), OQL)
+                OQL = _update_left_environment(A, torch.matmul(Opj, A), OQL)
             else:
                 OQL = _update_left_environment(A, A, OQL)
         return _join_environments(OQL, self.right_environment(j))
@@ -334,10 +335,10 @@ class MPS(array.TensorArray):
             A = self[i]
             ρR = allρR[i]
             op_i = operator[i] if isinstance(operator, list) else operator
-            OρL = _update_left_environment(A, np.matmul(to_dense_operator(op_i), A), ρL)
+            OρL = _update_left_environment(A, torch.matmul(to_dense_operator(op_i), A), ρL)
             output[i] = _join_environments(OρL, ρR)
             ρL = _update_left_environment(A, A, ρL)
-        return np.array(output)
+        return torch.tensor(output)
 
     def left_environment(self, site: int) -> Environment:
         """Environment matrix for systems to the left of `site`."""
@@ -430,18 +431,27 @@ class MPS(array.TensorArray):
         assert L >= self.size
         assert len(sites) == self.size
 
-        data: list[np.ndarray] = [np.ndarray(())] * L
+        # Determine the dtype and device from existing tensors, or default if no data
+        if self._data:
+            dtype = self._data[0].dtype
+            device = self._data[0].device
+        else:
+            dtype = torch.float64 # Default to float64, adjust as needed
+            device = torch.device("cpu") # Default to CPU, adjust as needed
+
+        data: list[torch.Tensor] = [torch.empty(())] * L
         for ndx, A in zip(sites, self):
             data[ndx] = A
         D = 1
         k = 0
         for i, A in enumerate(data):
             if A.ndim == 0:
-                A = np.zeros((D, final_dimensions[k], D))
+                A = torch.zeros((D, final_dimensions[k], D), dtype=dtype, device=device)
                 if state is not None:
-                    A = np.eye(D).reshape(D, 1, D) * np.reshape(state, (-1, 1))
+                    # Assuming 'state' is a torch.Tensor for consistency
+                    A = torch.eye(D, dtype=dtype, device=device).reshape(D, 1, D) * state.reshape(-1, 1)
                 else:
-                    A[:, 0, :] = np.eye(D)
+                    A[:, 0, :] = torch.eye(D, dtype=dtype, device=device)
                 data[i] = A
                 k += 1
             else:
@@ -459,19 +469,19 @@ class MPS(array.TensorArray):
 def _mps2vector(data: list[Tensor3]) -> Vector:
     #
     # Input:
-    #  - data: list of tensors for the MPS (unchecked)
+    #   - data: list of tensors for the MPS (unchecked)
     # Output:
-    #  - Ψ: Vector of complex Complexs with all the wavefunction amplitudes
+    #   - Ψ: Vector of complex Complexs with all the wavefunction amplitudes
     #
     # We keep Ψ[D,β], a tensor with all matrices contracted so far, where
     # 'D' is the dimension of the physical subsystems up to this point and
     # 'β' is the last uncontracted internal index.
     #
-    Ψ: np.ndarray = np.ones(1)
+    Ψ: torch.Tensor = torch.ones(1, dtype=data[0].dtype, device=data[0].device) if data else torch.ones(1)
     for A in reversed(data):
         α, d, β = A.shape
-        # Ψ = np.einsum("Da,akb->Dkb", Ψ, A)
-        Ψ = np.dot(A.reshape(α * d, β), Ψ).reshape(α, -1)
+        # Ψ = torch.einsum("Da,akb->Dkb", Ψ, A)
+        Ψ = torch.matmul(A.reshape(α * d, β), Ψ).reshape(α, -1)
     return Ψ.reshape(-1)
 
 

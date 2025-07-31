@@ -1,6 +1,6 @@
 from __future__ import annotations
 import warnings
-import numpy as np
+import torch
 from collections.abc import Sequence, Iterable
 from ..typing import Vector, Tensor3, Tensor4, VectorLike, Environment
 from .schmidt import (
@@ -85,7 +85,7 @@ class CanonicalMPS(MPS):
             normalize is None and self.strategy.get_normalize_flag()
         ):
             A = self[actual_center]
-            N = np.linalg.norm(A.reshape(-1))
+            N = torch.linalg.norm(A.reshape(-1))
             if N:
                 self[actual_center] = A / N
             else:
@@ -136,7 +136,7 @@ class CanonicalMPS(MPS):
     def zero_state(self) -> CanonicalMPS:
         """Return a zero wavefunction with the same physical dimensions."""
         return CanonicalMPS(
-            [np.zeros((1, A.shape[1], 1)) for A in self._data],
+            [torch.zeros((1, A.shape[1], 1), dtype=A.dtype, device=A.device) for A in self._data],
             error=0.0,
             center=0,
             is_canonical=True,
@@ -144,9 +144,8 @@ class CanonicalMPS(MPS):
 
     def norm_squared(self) -> float:
         """Norm-2 squared :math:`\\Vert{\\psi}\\Vert^2` of this MPS."""
-        A: np.ndarray = self._data[self.center]
-        # TODO: Find out why NumPy thinks np.vdot is of type bool
-        return np.vdot(A, A).real  # pyright: ignore[reportReturnType]
+        A: torch.Tensor = self._data[self.center]
+        return torch.vdot(A, A).real.item()
 
     def left_environment(self, site: int) -> Environment:
         """Optimized version of :py:meth:`~seemps.state.MPS.left_environment`"""
@@ -175,7 +174,7 @@ class CanonicalMPS(MPS):
 
         Returns
         -------
-        numbers: np.ndarray
+        numbers: torch.Tensor
             Vector of non-negative Schmidt weights.
         """
         if site is None:
@@ -204,7 +203,7 @@ class CanonicalMPS(MPS):
             Von Neumann entropy of bipartition.
         """
         s = self.Schmidt_weights(site)
-        return -np.sum(s * np.log2(s))
+        return -torch.sum(s * torch.log2(s)).item()
 
     def Renyi_entropy(self, site: int | None = None, alpha: float = 2.0) -> float:
         """Compute the Renyi entropy of the MPS for a bipartition
@@ -230,8 +229,8 @@ class CanonicalMPS(MPS):
             alpha = 1e-9
         elif alpha == 1:
             alpha = 1 - 1e-9
-        S = np.log(np.sum(s**alpha)) / (1 - alpha)
-        return S
+        S = torch.log(torch.sum(s**alpha)) / (1 - alpha)
+        return S.item()
 
     def update_canonical(
         self, A: Tensor3, direction: int, truncation: Strategy
@@ -351,7 +350,7 @@ class CanonicalMPS(MPS):
         """Normalize the state by updating the central tensor."""
         n = self.center
         A = self._data[n]
-        N = np.linalg.norm(A.reshape(-1))
+        N = torch.linalg.norm(A.reshape(-1))
         if N:
             self._data[n] = A / N
         return self

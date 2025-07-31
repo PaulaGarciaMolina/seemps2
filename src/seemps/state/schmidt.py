@@ -1,12 +1,10 @@
 from __future__ import annotations
-import numpy as np
+import torch
 import math
 from collections.abc import Sequence
-from numpy.typing import NDArray
 from typing import Literal
 from ..typing import VectorLike, Tensor3, Vector
 from .core import Strategy, DEFAULT_STRATEGY
-from scipy.linalg import svd as _scipy_svd
 from .core import _destructive_svd, _left_orth_2site, _right_orth_2site
 
 #
@@ -19,15 +17,13 @@ SVD_LAPACK_DRIVER: Literal["gesvd", "gesdd"] = "gesvd"
 
 def _schmidt_weights(A: Tensor3) -> Vector:
     d1, d2, d3 = A.shape
-    s: Vector = _scipy_svd(
+    # PyTorch's SVD function
+    _, s, _ = torch.linalg.svd(
         A.reshape(d1 * d2, d3),
-        full_matrices=False,
-        compute_uv=False,
-        check_finite=False,
-        lapack_driver=SVD_LAPACK_DRIVER,
+        full_matrices=False
     )
-    s *= s
-    s /= np.sum(s)
+    s = s * s
+    s = s / torch.sum(s)
     return s
 
 
@@ -43,14 +39,15 @@ def _vector2mps(
 
     Parameters
     ----------
-    ψ         -- wavefunction with \\prod_i dimensions[i] elements
+    ψ
+        -- wavefunction with \\prod_i dimensions[i] elements
     dimensions -- list of dimensions of the Hilbert spaces that build ψ
     tolerance -- truncation criterion for dropping Schmidt numbers
     normalize -- boolean to determine if the MPS is normalized
     """
-    ψ: NDArray = np.asarray(state).copy().reshape(1, -1, 1)
+    ψ: torch.Tensor = torch.as_tensor(state).clone().reshape(1, -1, 1)
     L = len(dimensions)
-    if math.prod(dimensions) != ψ.size:
+    if math.prod(dimensions) != ψ.numel():
         raise Exception("Wrong dimensions specified when converting a vector to MPS")
     output = [ψ] * L
     if center < 0:
@@ -69,8 +66,8 @@ def _vector2mps(
         )
         err += new_err
     if normalize:
-        N = np.linalg.norm(ψ.reshape(-1))
-        ψ /= N
+        N = torch.linalg.norm(ψ.reshape(-1))
+        ψ = ψ / N
         err /= float(N)
     output[center] = ψ
     return output, err

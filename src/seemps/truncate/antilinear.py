@@ -1,5 +1,5 @@
 from __future__ import annotations
-import numpy as np
+import torch
 from ..typing import Tensor3, Tensor4, DenseOperator
 from ..state import MPS
 from ..state._contractions import _contract_last_and_first
@@ -62,7 +62,7 @@ class AntilinearForm:
         L = self.L[center]
         R = self.R[center]
         C = self.ket[center]
-        return np.einsum("li,ijk,kn->ljn", L, C, R)
+        return torch.einsum("li,ijk,kn->ljn", L, C, R)
 
     def tensor2site(self, direction: int) -> Tensor4:
         """Return the tensor that represents the LinearForm using 'center'
@@ -89,11 +89,11 @@ class AntilinearForm:
         A = self.ket[i]
         B = self.ket[j]
         R = self.R[j]
-        # np.einsum("li,ijk->ljk", L, A)
+        # torch.einsum("li,ijk->ljk", L, A)
         LA = _contract_last_and_first(L, A)
-        # np.einsum("kmn,no->kmo", B, R)
-        BR = np.matmul(B, R)
-        # np.einsum("ljk,kmo->ljmo", LA, BR)
+        # torch.einsum("kmn,no->kmo", B, R)
+        BR = torch.matmul(B, R)
+        # torch.einsum("ljk,kmo->ljmo", LA, BR)
         return _contract_last_and_first(LA, BR)
 
     def update(self, direction: int) -> None:

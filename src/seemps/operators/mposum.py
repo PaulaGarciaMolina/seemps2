@@ -1,5 +1,5 @@
 from __future__ import annotations
-import numpy as np
+import torch
 import warnings
 from collections.abc import Sequence
 from ..typing import Weight, DenseOperator, Tensor4
@@ -72,7 +72,7 @@ class MPOSum(object):
             new_weights = self.weights + [-1]
             new_mpos = self.mpos + [A]
         elif isinstance(A, MPOSum):
-            new_weights = self.weights + list((-1) * np.asarray(A.weights))
+            new_weights = self.weights + list((-1) * torch.tensor(A.weights))
             new_mpos = self.mpos + A.mpos
         else:
             raise TypeError(
@@ -193,9 +193,9 @@ class MPOSum(object):
         As: list[Tensor4] = [mpo[i] for mpo in mpos]
         L = self.size
         if i == 0:
-            return np.concatenate([w * A for w, A in zip(self.weights, As)], axis=-1)
+            return torch.concatenate([w * A for w, A in zip(self.weights, As)], axis=-1)
         if i == L - 1:
-            return np.concatenate(As, axis=0)
+            return torch.concatenate(As, axis=0)
 
         DL: int = 0
         DR: int = 0
@@ -206,7 +206,7 @@ class MPOSum(object):
             DL += a
             DR += b
             w += A[0, 0, 0, 0]
-        B = np.zeros((DL, d, d, DR), dtype=type(w))
+        B = torch.zeros((DL, d, d, DR), dtype=type(w))
         DL = 0
         DR = 0
         for A in As:

@@ -2,7 +2,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import overload
 import warnings
-import numpy as np
+import torch
 from ..tools import InvalidOperation
 from ..typing import Tensor4, Tensor3, DenseOperator, Weight
 from ..state import DEFAULT_STRATEGY, MPS, CanonicalMPS, MPSSum, Strategy, TensorArray
@@ -17,7 +17,7 @@ from ..state.environments import (
 
 def _mpo_multiply_tensor(A: Tensor4, B: Tensor3):
     # Implements
-    # np.einsum("cjd,aijb->caidb", B, A)
+    # torch.einsum("cjd,aijb->caidb", B, A)
     #
     # Matmul takes two arguments
     #     B(c, 1, 1, d, j)
@@ -31,8 +31,8 @@ def _mpo_multiply_tensor(A: Tensor4, B: Tensor3):
     #
     a, i, j, b = A.shape
     c, j, d = B.shape
-    # np.matmul(...) -> C(a,i,b,c,d)
-    return np.matmul(
+    # torch.matmul(...) -> C(a,i,b,c,d)
+    return torch.matmul(
         B.transpose(0, 2, 1).reshape(c, 1, 1, d, j), A.reshape(1, a, i, j, b)
     ).reshape(c * a, i, d * b)
 
@@ -89,7 +89,7 @@ class MPO(TensorArray):
             absn = abs(n)
             if absn:
                 phase = n / absn
-                factor = np.exp(np.log(absn) / self.size)
+                factor = torch.exp(torch.log(absn) / self.size)
             else:
                 phase = 0.0
                 factor = 0.0
@@ -108,7 +108,7 @@ class MPO(TensorArray):
             absn = abs(n)
             if absn:
                 phase = n / absn
-                factor = np.exp(np.log(absn) / self.size)
+                factor = torch.exp(torch.log(absn) / self.size)
             else:
                 phase = 0.0
                 factor = 0.0
@@ -153,10 +153,10 @@ class MPO(TensorArray):
         """Convert this MPO to a dense or sparse matrix."""
         Di = 1  # Total physical dimension so far
         Dj = 1
-        out = np.array([[[1.0]]])
+        out = torch.tensor([[[1.0]]])
         for A in self:
             _, i, j, b = A.shape
-            out = np.einsum("lma,aijb->limjb", out, A)
+            out = torch.einsum("lma,aijb->limjb", out, A)
             Di *= i
             Dj *= j
             out = out.reshape(Di, Dj, b)
@@ -280,7 +280,7 @@ class MPO(TensorArray):
         assert L >= self.size
         assert len(sites) == self.size
 
-        data: list[np.ndarray] = [np.ndarray(())] * L
+        data: list[torch.Tensor] = [torch.tensor(())] * L
         for ndx, A in zip(sites, self):
             data[ndx] = A
         D = 1
@@ -288,7 +288,7 @@ class MPO(TensorArray):
         for i, A in enumerate(data):
             if A.ndim == 0:
                 d = final_dimensions[k]
-                A = np.eye(D).reshape(D, 1, 1, D) * np.eye(d).reshape(1, d, d, 1)
+                A = torch.eye(D).reshape(D, 1, 1, D) * torch.eye(d).reshape(1, d, d, 1)
                 data[i] = A
                 k = k + 1
             else:
@@ -338,7 +338,7 @@ class MPO(TensorArray):
     def reverse(self) -> MPO:
         return MPO(
             [
-                np.moveaxis(op, [0, 1, 2, 3], [3, 1, 2, 0])
+                torch.moveaxis(op, [0, 1, 2, 3], [3, 1, 2, 0])
                 for op in reversed(self._data)
             ],
             self.strategy,
@@ -541,10 +541,10 @@ class MPOList(object):
             #    a * c, d, d, b * e
             # )
             # aijbc,cjkd->aibckd->acikbd
-            aux = np.tensordot(B, A, ((2,), (1,)))
-            return np.ascontiguousarray(
-                aux.transpose(0, 3, 1, 4, 2, 5).reshape(a * c, d, d, b * e)
-            )
+            aux = torch.tensordot(B, A, ((2,), (1,)))
+            aux = aux.permute(0, 3, 1, 4, 2, 5).reshape(a * c, d, d, b * e).contiguous()
+
+            return aux
 
         return join(*[mpo[i] for mpo in self.mpos])
 

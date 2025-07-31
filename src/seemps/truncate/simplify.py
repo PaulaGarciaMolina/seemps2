@@ -1,6 +1,6 @@
 from __future__ import annotations
 from math import sqrt
-import numpy as np
+import torch
 from ..tools import make_logger
 from ..state import (
     DEFAULT_TOLERANCE,
@@ -122,8 +122,8 @@ def simplify(
         #
         # We estimate the error
         #
-        norm_mps_sqr = np.vdot(last_tensor, last_tensor).real
-        mps_state_scprod = np.vdot(last_tensor, form.tensor1site())
+        norm_mps_sqr = torch.vdot(last_tensor, last_tensor).real
+        mps_state_scprod = torch.vdot(last_tensor, form.tensor1site())
         old_err = err
         err = 2 * abs(1.0 - mps_state_scprod.real / sqrt(norm_mps_sqr * norm_state_sqr))
         if logger:
@@ -255,8 +255,8 @@ def simplify_mps_sum(
         #
         # We estimate the error
         #
-        norm_mps_sqr = np.vdot(last_tensor, last_tensor).real
-        mps_state_scprod = np.vdot(
+        norm_mps_sqr = torch.vdot(last_tensor, last_tensor).real
+        mps_state_scprod = torch.vdot(
             last_tensor,
             sum(w * f.tensor1site() for w, f in zip(weights, forms)),
         )
